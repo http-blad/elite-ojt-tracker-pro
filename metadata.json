@@ -1,0 +1,7 @@
+{
+  "name": "Elite OJT Tracker Pro",
+  "description": "A comprehensive On-the-Job Training management system with AI-powered training plan generation and progress analysis.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
