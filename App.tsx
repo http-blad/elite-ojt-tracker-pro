@@ -42,79 +42,24 @@ const App: React.FC = () => {
   const [showForm, setShowForm] = useState(false);
   const [editingIntern, setEditingIntern] = useState<Intern | null>(null);
 
-  // Persistence
-  useEffect(() => {
-    localStorage.setItem('ojt_interns', JSON.stringify(interns));
-  }, [interns]);
-
-  useEffect(() => {
-    localStorage.setItem('ojt_student_accounts', JSON.stringify(studentAccounts));
-  }, [studentAccounts]);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const root = document.documentElement;
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-
-    const resolveTheme = () => {
-      // If user not loaded yet, fall back to system (or light if you prefer)
-      const t = user?.theme ?? "system"; // <-- change to "light" if you want
-      if (t === "system") return mediaQuery.matches ? "dark" : "light";
-      return t; // "dark" | "light"
-    };
-
-    const applyTheme = () => {
-      const finalTheme = resolveTheme();
-      root.classList.toggle("dark", finalTheme === "dark");
-    };
-
-    applyTheme();
-
-    // React to system changes only when theme is system
-    const onChange = () => {
-      if ((user?.theme ?? "system") === "system") applyTheme();
-    };
-
-    // Cross-browser support
-    if (mediaQuery.addEventListener) {
-      mediaQuery.addEventListener("change", onChange);
-    } else {
-      // @ts-ignore (older Safari)
-      mediaQuery.addListener(onChange);
-    }
-
-    return () => {
-      if (mediaQuery.removeEventListener) {
-        mediaQuery.removeEventListener("change", onChange);
-      } else {
-        // @ts-ignore
-        mediaQuery.removeListener(onChange);
-      }
-    };
-  }, [user?.theme]);
-
-  useEffect(() => {
-    localStorage.setItem('ojt_messages', JSON.stringify(messages));
-  }, [messages]);
-
-  // Enhanced Theme Management with System Listener
+  // Robust Theme Management
   useEffect(() => {
     const root = window.document.documentElement;
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     
-    const updateTheme = () => {
+    const applyTheme = () => {
       if (!user) {
         root.classList.remove('dark');
         return;
       }
 
-      const currentTheme = user.theme || 'light';
+      const theme = user.theme || 'system';
       
-      if (currentTheme === 'dark') {
+      if (theme === 'dark') {
         root.classList.add('dark');
-      } else if (currentTheme === 'light') {
+      } else if (theme === 'light') {
         root.classList.remove('dark');
-      } else if (currentTheme === 'system') {
+      } else if (theme === 'system') {
         if (mediaQuery.matches) {
           root.classList.add('dark');
         } else {
@@ -123,20 +68,29 @@ const App: React.FC = () => {
       }
     };
 
-    updateTheme();
+    applyTheme();
 
-    // Listen for system theme changes if 'system' is selected
     const handleSystemChange = () => {
-      if (user?.theme === 'system') {
-        updateTheme();
-      }
+      if (user?.theme === 'system') applyTheme();
     };
 
     mediaQuery.addEventListener('change', handleSystemChange);
     return () => mediaQuery.removeEventListener('change', handleSystemChange);
   }, [user?.theme, user]);
 
-  // Notifications logic
+  // Persistence
+  useEffect(() => {
+    localStorage.setItem('ojt_interns', JSON.stringify(interns));
+  }, [interns]);
+
+  useEffect(() => {
+    localStorage.setItem('ojt_student_accounts', JSON.stringify(studentAccounts));
+  }, [studentAccounts]);
+
+  useEffect(() => {
+    localStorage.setItem('ojt_messages', JSON.stringify(messages));
+  }, [messages]);
+
   const addNotification = useCallback((targetUserId: string, title: string, message: string, type: Notification['type'] = 'info') => {
     const newNotif: Notification = {
       id: Math.random().toString(36).substr(2, 9),
@@ -166,8 +120,6 @@ const App: React.FC = () => {
       timestamp: new Date().toISOString(),
     };
     setMessages(prev => [...prev, newMessage]);
-
-    // Notify receiver
     addNotification(receiverId, "New Message", `You received a message from ${user.name}.`, "info");
   };
 
@@ -185,8 +137,8 @@ const App: React.FC = () => {
   const handleUpdateUser = (updatedUser: User) => {
     setUser(updatedUser);
     localStorage.setItem('ojt_auth_user', JSON.stringify(updatedUser));
-
-    // Also sync with the main student/admin accounts list so it persists correctly
+    
+    // Sync with persistent account storage
     if (updatedUser.role === 'STUDENT') {
       setStudentAccounts(prev => prev.map(acc => acc.id === updatedUser.id ? updatedUser : acc));
     }
@@ -211,13 +163,10 @@ const App: React.FC = () => {
 
   const handleEditIntern = (updatedInternData: Partial<Intern>) => {
     setInterns(prev => prev.map(i => i.id === updatedInternData.id ? { ...i, ...updatedInternData } : i));
-    
-    // Notify user if account was updated
     const account = studentAccounts.find(acc => acc.internId === updatedInternData.id);
     if (account) {
       addNotification(account.id, "Account Update", "Admin has updated your internship profile information.", "info");
     }
-    
     setEditingIntern(null);
     setSelectedIntern(null);
   };
@@ -234,7 +183,7 @@ const App: React.FC = () => {
       password: password || 'password123',
       internId,
       notifications: [],
-      theme: 'system' // Default to system theme for new accounts
+      theme: 'system'
     };
     setStudentAccounts(prev => [...prev, newAccount]);
     setInterns(prev => prev.map(i => i.id === internId ? { ...i, hasAccount: true } : i));
@@ -245,15 +194,12 @@ const App: React.FC = () => {
       if (i.id === internId) {
         const updatedLogs = [...i.logs, log];
         const updatedHours = updatedLogs.reduce((acc, l) => acc + l.hoursSpent, 0);
-        
-        // Notify Admin if it's the student logging
         if (user?.role === 'STUDENT') {
-          const admins = ['admin-01']; // Mock admin list
+          const admins = ['admin-01']; 
           admins.forEach(adminId => {
             addNotification(adminId, "New Report", `${i.name} has submitted a new daily activity report.`, "success");
           });
         }
-
         return { ...i, logs: updatedLogs, renderedHours: updatedHours };
       }
       return i;
@@ -307,19 +253,8 @@ const App: React.FC = () => {
   return (
     <Layout activeTab={activeTab} setActiveTab={setActiveTab} user={user} onLogout={handleLogout}>
       {renderContent()}
-      {showForm && (
-        <InternForm 
-          onClose={() => setShowForm(false)} 
-          onSubmit={handleAddIntern} 
-        />
-      )}
-      {editingIntern && (
-        <InternForm 
-          onClose={() => setEditingIntern(null)} 
-          onSubmit={handleEditIntern} 
-          initialData={editingIntern}
-        />
-      )}
+      {showForm && <InternForm onClose={() => setShowForm(false)} onSubmit={handleAddIntern} />}
+      {editingIntern && <InternForm onClose={() => setEditingIntern(null)} onSubmit={handleEditIntern} initialData={editingIntern} />}
     </Layout>
   );
 };
