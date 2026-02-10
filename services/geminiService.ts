@@ -1,7 +1,8 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+// Always use process.env.API_KEY directly as a named parameter in the initialization object.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const generateTrainingPlan = async (intern: { course: string; company: string; department: string }) => {
   try {
@@ -28,6 +29,7 @@ export const generateTrainingPlan = async (intern: { course: string; company: st
       }
     });
     
+    // Correctly extract text using the .text property (not a method).
     return JSON.parse(response.text);
   } catch (error) {
     console.error("Error generating training plan:", error);
@@ -43,9 +45,11 @@ export const analyzeProgress = async (logs: any[], internName: string) => {
       contents: `Analyze these internship logs for ${internName}:\n${logSummary}\n\nProvide a professional summary of key achievements, identified skills, and suggestions for areas to focus on next. Return plain text summary.`,
     });
     
+    // Correctly extract text using the .text property (not a method).
     return response.text;
   } catch (error) {
     console.error("Error analyzing progress:", error);
     return "Analysis currently unavailable.";
   }
 };
+//new

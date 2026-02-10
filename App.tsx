@@ -14,7 +14,7 @@ import StudentActivityLog from './components/student/StudentActivityLog';
 import StudentProgress from './components/student/StudentProgress';
 import { Intern, User, Notification, ChatMessage } from './types';
 import { INITIAL_INTERNS } from './constants';
-
+//new
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(() => {
     const saved = localStorage.getItem('ojt_auth_user');
