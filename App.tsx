@@ -14,7 +14,8 @@ import StudentActivityLog from './components/student/StudentActivityLog';
 import StudentProgress from './components/student/StudentProgress';
 import { Intern, User, Notification, ChatMessage } from './types';
 import { INITIAL_INTERNS } from './constants';
-//new
+import { AuthService } from './services/authService';
+
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(() => {
     const saved = localStorage.getItem('ojt_auth_user');
@@ -22,6 +23,7 @@ const App: React.FC = () => {
   });
   
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [initializing, setInitializing] = useState(true);
   
   const [interns, setInterns] = useState<Intern[]>(() => {
     const saved = localStorage.getItem('ojt_interns');
@@ -42,72 +44,82 @@ const App: React.FC = () => {
   const [showForm, setShowForm] = useState(false);
   const [editingIntern, setEditingIntern] = useState<Intern | null>(null);
 
-  // Robust Theme Management
+  // Sync with Laravel Session on Mount
+  useEffect(() => {
+    const initAuth = async () => {
+      const serverUser = await AuthService.checkSession();
+      if (serverUser) {
+        handleLogin(serverUser);
+      } else if (user) {
+        // Local state says logged in but server says no: logout
+        handleLogout();
+      }
+      setInitializing(false);
+    };
+    initAuth();
+  }, []);
+
+  // Theme Sync
   useEffect(() => {
     const root = window.document.documentElement;
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    
-    const applyTheme = () => {
-      if (!user) {
-        root.classList.remove('dark');
-        return;
-      }
-
-      const theme = user.theme || 'system';
-      
-      if (theme === 'dark') {
-        root.classList.add('dark');
-      } else if (theme === 'light') {
-        root.classList.remove('dark');
-      } else if (theme === 'system') {
-        if (mediaQuery.matches) {
-          root.classList.add('dark');
-        } else {
-          root.classList.remove('dark');
-        }
-      }
-    };
-
-    applyTheme();
-
-    const handleSystemChange = () => {
-      if (user?.theme === 'system') applyTheme();
-    };
-
-    mediaQuery.addEventListener('change', handleSystemChange);
-    return () => mediaQuery.removeEventListener('change', handleSystemChange);
+    const theme = user?.theme || 'dark';
+    if (theme === 'dark') root.classList.add('dark');
+    else root.classList.remove('dark');
   }, [user?.theme, user]);
 
-  // Persistence
-  useEffect(() => {
-    localStorage.setItem('ojt_interns', JSON.stringify(interns));
-  }, [interns]);
+  // Persistence side-effects
+  useEffect(() => localStorage.setItem('ojt_interns', JSON.stringify(interns)), [interns]);
+  useEffect(() => localStorage.setItem('ojt_student_accounts', JSON.stringify(studentAccounts)), [studentAccounts]);
+  useEffect(() => localStorage.setItem('ojt_messages', JSON.stringify(messages)), [messages]);
 
-  useEffect(() => {
-    localStorage.setItem('ojt_student_accounts', JSON.stringify(studentAccounts));
-  }, [studentAccounts]);
+  const handleLogin = (u: User) => {
+    setUser(u);
+    localStorage.setItem('ojt_auth_user', JSON.stringify(u));
+  };
 
-  useEffect(() => {
-    localStorage.setItem('ojt_messages', JSON.stringify(messages));
-  }, [messages]);
+  const handleLogout = async () => {
+    await AuthService.logout();
+    setUser(null);
+    localStorage.removeItem('ojt_auth_user');
+  };
 
-  const addNotification = useCallback((targetUserId: string, title: string, message: string, type: Notification['type'] = 'info') => {
-    const newNotif: Notification = {
-      id: Math.random().toString(36).substr(2, 9),
-      userId: targetUserId,
-      title,
-      message,
-      timestamp: new Date().toISOString(),
-      read: false,
-      type
-    };
-
-    if (user?.id === targetUserId) {
-      setUser(prev => prev ? { ...prev, notifications: [newNotif, ...(prev.notifications || [])] } : null);
-    } else {
-      setStudentAccounts(prev => prev.map(acc => acc.id === targetUserId ? { ...acc, notifications: [newNotif, ...(acc.notifications || [])] } : acc));
+  const handleUpdateUser = (updatedUser: User) => {
+    setUser(updatedUser);
+    localStorage.setItem('ojt_auth_user', JSON.stringify(updatedUser));
+    if (updatedUser.role === 'STUDENT') {
+      setStudentAccounts(prev => prev.map(acc => acc.id === updatedUser.id ? updatedUser : acc));
     }
-  }, [user?.id]);
+  };
+
+  const handleAddIntern = (newInternData: Partial<Intern>) => {
+    const id = Math.random().toString(36).substr(2, 9);
+    const intern: Intern = { 
+      ...newInternData, 
+      id, 
+      logs: [], 
+      renderedHours: 0,
+      hasAccount: false 
+    } as Intern;
+    setInterns([...interns, intern]);
+    setShowForm(false);
+  };
+
+  const handleEditIntern = (updatedInternData: Partial<Intern>) => {
+    setInterns(prev => prev.map(i => i.id === updatedInternData.id ? { ...i, ...updatedInternData } : i));
+    setEditingIntern(null);
+    setSelectedIntern(null);
+  };
+
+  const handleAddLogEntry = (internId: string, log: any) => {
+    setInterns(prev => prev.map(i => {
+      if (i.id === internId) {
+        const updatedLogs = [...i.logs, log];
+        const updatedHours = updatedLogs.reduce((acc, l) => acc + l.hoursSpent, 0);
+        return { ...i, logs: updatedLogs, renderedHours: updatedHours };
+      }
+      return i;
+    }));
+  };
 
   const handleSendMessage = (text: string, receiverId: string) => {
     if (!user) return;
@@ -120,97 +132,24 @@ const App: React.FC = () => {
       timestamp: new Date().toISOString(),
     };
     setMessages(prev => [...prev, newMessage]);
-    addNotification(receiverId, "New Message", `You received a message from ${user.name}.`, "info");
   };
 
-  const handleLogin = (u: User) => {
-    setUser(u);
-    localStorage.setItem('ojt_auth_user', JSON.stringify(u));
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    localStorage.removeItem('ojt_auth_user');
-    window.document.documentElement.classList.remove('dark');
-  };
-
-  const handleUpdateUser = (updatedUser: User) => {
-    setUser(updatedUser);
-    localStorage.setItem('ojt_auth_user', JSON.stringify(updatedUser));
-    
-    // Sync with persistent account storage
-    if (updatedUser.role === 'STUDENT') {
-      setStudentAccounts(prev => prev.map(acc => acc.id === updatedUser.id ? updatedUser : acc));
-    }
-  };
-
-  const handleAddIntern = (newInternData: Partial<Intern>, password?: string) => {
-    const id = Math.random().toString(36).substr(2, 9);
-    const intern: Intern = { 
-      ...newInternData, 
-      id, 
-      logs: [], 
-      renderedHours: 0,
-      hasAccount: !!password 
-    } as Intern;
-    
-    setInterns([...interns, intern]);
-    if (password) {
-      handleCreateStudentAccount(id, intern.email, intern.name, password);
-    }
-    setShowForm(false);
-  };
-
-  const handleEditIntern = (updatedInternData: Partial<Intern>) => {
-    setInterns(prev => prev.map(i => i.id === updatedInternData.id ? { ...i, ...updatedInternData } : i));
-    const account = studentAccounts.find(acc => acc.internId === updatedInternData.id);
-    if (account) {
-      addNotification(account.id, "Account Update", "Admin has updated your internship profile information.", "info");
-    }
-    setEditingIntern(null);
-    setSelectedIntern(null);
-  };
-
-  const handleCreateStudentAccount = (internId: string, email: string, name: string, password?: string) => {
-    const newAccount: User = {
-      id: `std-${Math.random().toString(36).substr(2, 9)}`,
-      name,
-      email,
-      role: 'STUDENT',
-      institution: user?.institution || 'Elite Institute',
-      batch: user?.batch || '2026',
-      term: user?.term || '2',
-      password: password || 'password123',
-      internId,
-      notifications: [],
-      theme: 'system'
-    };
-    setStudentAccounts(prev => [...prev, newAccount]);
-    setInterns(prev => prev.map(i => i.id === internId ? { ...i, hasAccount: true } : i));
-  };
-
-  const handleAddLogEntry = (internId: string, log: any) => {
-    setInterns(prev => prev.map(i => {
-      if (i.id === internId) {
-        const updatedLogs = [...i.logs, log];
-        const updatedHours = updatedLogs.reduce((acc, l) => acc + l.hoursSpent, 0);
-        if (user?.role === 'STUDENT') {
-          const admins = ['admin-01']; 
-          admins.forEach(adminId => {
-            addNotification(adminId, "New Report", `${i.name} has submitted a new daily activity report.`, "success");
-          });
-        }
-        return { ...i, logs: updatedLogs, renderedHours: updatedHours };
-      }
-      return i;
-    }));
-  };
+  if (initializing) {
+    return (
+      <div className="h-screen w-full flex items-center justify-center bg-[#020617]">
+        <div className="flex flex-col items-center gap-6">
+          <div className="w-16 h-16 border-4 border-indigo-500/20 border-t-indigo-600 rounded-full animate-spin"></div>
+          <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.4em] animate-pulse">Laravel Sync Active</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!user) {
     return <Auth onLogin={handleLogin} studentAccounts={studentAccounts} />;
   }
 
-  const currentUserIntern = user.role === 'STUDENT' ? interns.find(i => i.id === user.internId) : null;
+  const currentUserIntern = user.role === 'STUDENT' ? interns.find(i => i.id === user.internId || i.email === user.email) : null;
 
   const renderContent = () => {
     if (user.role === 'ADMIN') {
@@ -220,8 +159,8 @@ const App: React.FC = () => {
             intern={selectedIntern} 
             onBack={() => setSelectedIntern(null)} 
             onUpdate={(updated) => setInterns(interns.map(i => i.id === updated.id ? updated : i))}
-            onCreateAccount={handleCreateStudentAccount}
-            isAccountCreated={studentAccounts.some(acc => acc.internId === selectedIntern.id)}
+            onCreateAccount={() => {}} 
+            isAccountCreated={selectedIntern.hasAccount || false}
             onEdit={() => setEditingIntern(selectedIntern)}
             onAddLog={(log) => handleAddLogEntry(selectedIntern.id, log)}
           />
@@ -236,7 +175,8 @@ const App: React.FC = () => {
       }
     }
 
-    if (user.role === 'STUDENT' && currentUserIntern) {
+    if (user.role === 'STUDENT') {
+      if (!currentUserIntern) return <div className="p-10 text-center text-slate-400">Warning: No intern record linked to this account.</div>;
       switch (activeTab) {
         case 'dashboard': return <StudentDashboard intern={currentUserIntern} />;
         case 'calendar': return <StudentCalendar intern={currentUserIntern} onAddLog={(log) => handleAddLogEntry(currentUserIntern.id, log)} />;
