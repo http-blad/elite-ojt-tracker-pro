@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
@@ -17,15 +18,13 @@ class User extends Authenticatable
      * @var array<int, string>
      */
     protected $fillable = [
-        'name',
         'email',
         'password',
         'role',
-        'institution',
-        'batch',
-        'term',
-        'internId',
-        'theme'
+        'email_verified_at',
+        'otp_code',
+        'otp_expires_at',
+
     ];
 
     /**
@@ -47,7 +46,17 @@ class User extends Authenticatable
     {
         return [
             'email_verified_at' => 'datetime',
+            'otp_expires_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+
+
+    /**
+     * Get all OTP codes for the user.
+     */
+    public function otps(): HasMany
+    {
+        return $this->hasMany(OtpCode::class);
     }
 }
