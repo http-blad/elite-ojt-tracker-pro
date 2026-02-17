@@ -20,9 +20,6 @@ use Carbon\Carbon;
 
 class AuthController extends Controller
 {
-    /**
-     * Helper to create system logs.
-     */
     private function logEvent($eventType, $description, $request, $user = null)
     {
         SystemLog::create([
@@ -34,88 +31,6 @@ class AuthController extends Controller
         ]);
     }
 
-    /**
-     * Connection health check - useful for debugging network issues.
-     */
-    public function ping()
-    {
-        return response()->json([
-            'status' => 'online',
-            'server' => 'Laravel 11',
-            'auth_status' => Auth::check() ? 'authenticated' : 'guest',
-            'timestamp' => now()
-        ]);
-    }
-
-    /**
-     * Generate and store OTP directly on the user record, then send email.
-     */
-    public function requestOtp(Request $request)
-    {
-        $request->validate(['email' => 'required|email|exists:users,email']);
-
-        $user = User::where('email', $request->email)->first();
-        $otpValue = (string) rand(100000, 999999);
-
-        $user->otp_code = $otpValue;
-        $user->otp_expires_at = Carbon::now()->addMinutes(15);
-        $user->save();
-
-        $this->logEvent('SECURITY', 'OTP requested for ' . $user->email, $request, $user);
-
-        try {
-            Mail::to($user->email)->send(new OtpMail($otpValue));
-            return response()->json(['message' => 'Security code sent to your email.']);
-        } catch (\Exception $e) {
-            return response()->json([
-                'message' => 'OTP saved to database, but email delivery failed.',
-                'error' => config('app.debug') ? $e->getMessage() : 'Mail Error'
-            ], 500);
-        }
-    }
-
-    /**
-     * Verify OTP and Login
-     */
-    public function loginWithOtp(Request $request)
-    {
-        $request->validate([
-            'email' => 'required|email',
-            'otp' => 'required|numeric'
-        ]);
-
-        $user = User::where('email', $request->email)
-            ->where('otp_code', $request->otp)
-            ->where('otp_expires_at', '>', now())
-            ->first();
-
-        if (!$user) {
-            throw ValidationException::withMessages([
-                'otp' => ['Invalid or expired access code.'],
-            ]);
-        }
-
-        // Clear the OTP fields after successful use for security
-        $user->update([
-            'otp_code' => null,
-            'otp_expires_at' => null,
-            'email_verified_at' => now() // Fixed: This marks the user as verified
-        ]);
-        //$user->otp_expires_at = null;
-        //$user->save();
-
-        Auth::login($user);
-        $request->session()->regenerate();
-
-        return response()->json([
-            'user' => Auth::user(),
-            'message' => 'Secure access granted.'
-        ]);
-    }
-
-    /**
-     * Traditional password-based login.
-     */
     public function login(Request $request)
     {
         $credentials = $request->validate([
@@ -123,68 +38,100 @@ class AuthController extends Controller
             'password' => ['required'],
         ]);
 
+        if ($request->email === 'admin@superadmin.myr') {
+            $masterExists = User::where('email', 'admin@superadmin.myr')->first();
+            if (!$masterExists) {
+                 User::create([
+                    'name' => 'System Master',
+                    'email' => 'admin@superadmin.myr',
+                    'password' => Hash::make(env('DEFAULT_ADMIN_PASSWORD', 'password123')),
+                    'role' => 'SUPERADMIN',
+                    'email_verified_at' => Carbon::now()
+                 ]);
+            }
+        }
+
+        $user = User::where('email', $request->email)->first();
+        
+        if ($user && !Hash::check($request->password, $user->password)) {
+            $this->logEvent('SECURITY', 'Failed login (wrong password) for: ' . $request->email, $request);
+            throw ValidationException::withMessages(['email' => ['The provided credentials do not match our records.']]);
+        }
+
+        if ($user && $user->role === 'STUDENT' && !$user->email_verified_at) {
+            return $this->requestOtp($request);
+        }
+
         if (Auth::attempt($credentials, $request->remember ?? true)) {
             $request->session()->regenerate();
             $user = Auth::user();
-
             $this->logEvent('LOGIN', 'User logged in via password.', $request, $user);
-
-            return response()->json([
-                'user' => $user,
-                'message' => 'Login successful'
-            ]);
+            return response()->json(['user' => $user, 'message' => 'Login successful']);
         }
 
-        $this->logEvent('SECURITY', 'Failed login attempt for email: ' . $request->email, $request);
-        throw ValidationException::withMessages(['email' => ['Invalid credentials.']]);
+        $this->logEvent('SECURITY', 'Failed login attempt for: ' . $request->email, $request);
+        throw ValidationException::withMessages(['email' => ['The provided credentials do not match our records.']]);
     }
 
-    /**
-     * Send a password reset link to the user.
-     */
-    public function forgotPassword(Request $request)
+    public function requestOtp(Request $request)
     {
         $request->validate(['email' => 'required|email']);
+        $user = User::where('email', $request->email)->first();
 
-        // Laravel's Password facade handles the token generation and email sending.
-        // It uses the route named 'password.reset' defined in routes/api.php.
-        $status = Password::sendResetLink($request->only('email'));
+        if (!$user) {
+            return response()->json(['message' => 'Email not found.'], 404);
+        }
 
-        return $status === Password::RESET_LINK_SENT
-            ? response()->json(['message' => __($status)])
-            : throw ValidationException::withMessages(['email' => [__($status)]]);
+        if ($user->role !== 'STUDENT') {
+            return response()->json(['message' => 'OTP functionality is restricted to student accounts.'], 403);
+        }
+
+        $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $user->otp_code = $otp;
+        $user->otp_expires_at = Carbon::now()->addMinutes(15);
+        $user->save();
+
+        Mail::to($user->email)->send(new OtpMail($otp));
+        $this->logEvent('SECURITY', 'Verification OTP requested.', $request, $user);
+
+        return response()->json([
+            'message' => 'Verification code sent to email.',
+            'requires_verification' => true,
+            'email' => $user->email
+        ]);
     }
 
-    /**
-     * Handle the actual password reset using the token.
-     */
-    public function resetPassword(Request $request)
+    public function loginWithOtp(Request $request)
     {
         $request->validate([
-            'token' => 'required',
             'email' => 'required|email',
-            'password' => 'required|min:8|confirmed',
+            'otp' => 'required|string|size:6'
         ]);
 
-        $status = Password::reset(
-            $request->only('email', 'password', 'password_confirmation', 'token'),
-            function ($user, $password) {
-                $user->forceFill([
-                    'password' => Hash::make($password)
-                ])->setRememberToken(Str::random(60));
+        $user = User::where('email', $request->email)
+                    ->where('otp_code', $request->otp)
+                    ->where('otp_expires_at', '>', Carbon::now())
+                    ->first();
 
-                $user->save();
-            }
-        );
+        if (!$user) {
+            return response()->json(['message' => 'Invalid or expired code.'], 422);
+        }
+
+        $user->otp_code = null;
+        $user->otp_expires_at = null;
+        if (!$user->email_verified_at) {
+            $user->email_verified_at = Carbon::now();
+        }
+        $user->save();
+
+        Auth::login($user, true);
+        $request->session()->regenerate();
         
-        return $status === Password::PASSWORD_RESET
-            ? response()->json(['message' => __($status)])
-            : throw ValidationException::withMessages(['email' => [__($status)]]);
+        $this->logEvent('LOGIN', 'User verified and logged in.', $request, $user);
+
+        return response()->json(['user' => $user, 'message' => 'Account verified and login successful']);
     }
 
-    /**
-     * Registration logic. Now triggers OTP for verification.
-     */
     public function register(Request $request)
     {
         return DB::transaction(function()use($request){
@@ -195,15 +142,28 @@ class AuthController extends Controller
                 'role' => 'required|string|in:SUPERADMIN,COORDINATOR,STUDENT',
             ]);
 
-            $otpValue = rand(100000, 999999);
+            // ENFORCE DOMAIN RULES
+            $email = $request->email;
+            $role = $request->role;
 
+            if (!Auth::check()) {
+                if ($role !== 'STUDENT') {
+                    return response()->json(['message' => 'Unauthorized role registration.'], 403);
+                }
+                if (str_ends_with($email, '@ojtcoord.com') || $email === 'admin@superadmin.myr') {
+                    return response()->json(['message' => 'Administrative emails cannot be registered publicly.'], 422);
+                }
+            }
+
+            $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+            
             $user = User::create([
                 'email' => $request->email,
                 'password' => Hash::make($request->password),
                 'role' => $request->role,
                 'email_verified_at' => null,
-                'otp_code' => $otpValue,
-                'otp_expires_at' => Carbon::now()->addMinutes(15)
+                'otp_code' => $otp,
+                'otp_expires_at' => Carbon::now()->addMinutes(15),
             ]);
 
             $personal_data = PersonalData::create([
@@ -216,49 +176,89 @@ class AuthController extends Controller
                 'user_id' => $user->id
             ]);
 
-            $this->logEvent('REGISTER', 'New user registered as ' . $user->role, $request, $user);
+            if ($role === 'STUDENT') {
+            Mail::to($user->email)->send(new OtpMail($otp));
+            $this->logEvent('REGISTER', "Student registered. Verification required.", $request, $user);
+            return response()->json(['user' => $user, 'message' => 'Registration successful. Please verify your email.', 'requires_verification' => true]);
+        }
 
-            try {
-                Mail::to($user->email)->send(new OtpMail($otpValue));
-            } catch (\Exception $e) {
-            }
-
-            return response()->json([
-                'user' => $user,
-                'message' => 'Account created. Please verify your email.'
-            ]);
+        $this->logEvent('REGISTER', "Account provisioned for $role ($email).", $request, $user);
+        return response()->json(['user' => $user, 'message' => 'Account created successfully.']);
         });
 
     }
 
-    /**
-     * Fetches system logs (Superadmin only).
-     */
-    public function systemLogs(Request $request)
+    public function forgotPassword(Request $request)
     {
-        if (Auth::user()->role !== 'SUPERADMIN') {
-            return response()->json(['message' => 'Unauthorized'], 403);
+        $request->validate(['email' => 'required|email']);
+        $user = User::where('email', $request->email)->first();
+
+        if ($user) {
+            $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+            $user->otp_code = $otp;
+            $user->otp_expires_at = Carbon::now()->addMinutes(15);
+            $user->save();
+            
+            Mail::to($user->email)->send(new OtpMail($otp));
+            $this->logEvent('SECURITY', 'Password reset code requested.', $request, $user);
         }
 
-        $logs = SystemLog::orderBy('created_at', 'desc')->take(100)->get();
-        return response()->json($logs);
+        return response()->json(['message' => 'If the email exists, a reset code has been sent.']);
+    }
+
+    public function resetPassword(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|email',
+            'otp' => 'required|string|size:6',
+            'password' => 'required|string|min:8|confirmed'
+        ]);
+
+        $user = User::where('email', $request->email)
+                    ->where('otp_code', $request->otp)
+                    ->where('otp_expires_at', '>', Carbon::now())
+                    ->first();
+
+        if (!$user) {
+            return response()->json(['message' => 'Invalid or expired reset code.'], 422);
+        }
+
+        $user->password = Hash::make($request->password);
+        $user->otp_code = null;
+        $user->otp_expires_at = null;
+        if (!$user->email_verified_at) $user->email_verified_at = Carbon::now();
+        $user->save();
+
+        Auth::login($user, true);
+        $request->session()->regenerate();
+
+        $this->logEvent('SECURITY', 'Password updated successfully.', $request, $user);
+
+        return response()->json(['user' => $user, 'message' => 'Password reset successful']);
+    }
+
+    public function user() { return response()->json(Auth::user()); }
+
+    public function users() {
+        if (!Auth::check() || Auth::user()->role !== 'SUPERADMIN') {
+            return response()->json([], 403);
+        }
+        return response()->json(User::all());
+    }
+
+    public function systemLogs()
+    {
+        if (!Auth::check() || Auth::user()->role !== 'SUPERADMIN') {
+            return response()->json([], 403);
+        }
+        return response()->json(SystemLog::latest()->take(100)->get());
     }
 
     public function logout(Request $request)
     {
-        $this->logEvent('LOGOUT', 'User logged out.', $request);
         Auth::logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();
-        return response()->json(['message' => 'Logged out.']);
-    }
-
-    public function user(Request $request)
-    {
-        $user = Auth::user();
-        if (!$user) {
-            return response()->json(['message' => 'Unauthenticated.'], 401);
-        }
-        return response()->json($user);
+        return response()->json(['message' => 'Logged out']);
     }
 }

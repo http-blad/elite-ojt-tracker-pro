@@ -15,7 +15,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('user_id')->constrained()->onDelete('cascade');
             $table->string('otp_code');
-            $table->timestamp('expires_at');
+            $table->timestamp('otp_expires_at');
             $table->timestamps();
         });
     }
@@ -25,6 +25,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('otp_codes');
+        Schema::dropIfExists('otp_code');
     }
 };

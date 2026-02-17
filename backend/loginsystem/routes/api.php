@@ -13,6 +13,8 @@ Route::middleware(['web'])->group(function () {
     // Connection Check
     Route::get('/ping', [AuthController::class, 'ping']);
 
+     // Manual Provisioning (Developer Tool)
+    Route::post('/seed-system', [AuthController::class, 'seedAdmin']);
     // Public Auth Routes
     Route::post('/login', [AuthController::class, 'login']);
     Route::post('/request-otp', [AuthController::class, 'requestOtp']);

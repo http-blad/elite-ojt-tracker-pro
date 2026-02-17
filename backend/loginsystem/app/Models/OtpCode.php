@@ -8,13 +8,13 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class OtpCode extends Model
 {
     protected $fillable = [
+        'otp_code',
+        'otp_expires_at',
         'user_id',
-        'code',
-        'expires_at'
     ];
 
     protected $casts = [
-        'expires_at' => 'datetime',
+        'otp_expires_at' => 'datetime',
     ];
 
     /**
